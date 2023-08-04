@@ -1,7 +1,9 @@
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dense, Flatten, Dropout
+from tensorflow.keras.layers import Conv2D, BatchNormalization, Dense, Flatten, Dropout
 from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.callbacks import LearningRateScheduler, EarlyStopping
+from tensorflow.keras.datasets import cifar10
 import numpy as np
 import random
 import tensorflow as tf
@@ -15,49 +17,50 @@ tf.random.set_seed(seed_value)
 random.seed(seed_value)
 np.random.seed(seed_value)
 
-def unpickle(file):
-    import pickle
-    with open(file, 'rb') as fo:
-        dict = pickle.load(fo, encoding = 'bytes')
-    return dict
+max_epoch = 5
 
-### Load the Iris dataset and create training and testing sets
+lr_decay = 0.993
+# Define Learning Rate Scheduler
+def scheduler(epoch, lr):
+    if epoch < 5:
+        return 0.0001
+    else:
+        return lr * lr_decay
+
+lr_callback = LearningRateScheduler(scheduler)
+
+### Load and preprocess the CIFAR-10 data
 def load_data():
-    for file in data_files:
-        data_dict = unpickle("data/" + file)
-        if file == data_files[0]:
-            train_x = data_dict[b'data']
-            train_y = data_dict[b'labels']
-        else:
-            train_x = np.concatenate((train_x, data_dict[b'data']), axis = 0)
-            train_y = np.concatenate((train_y, data_dict[b'labels']), axis = 0)
-
-    # Load test data 
-    test_dict = unpickle("data/" + test_file)
-    test_x = test_dict[b'data']
-    test_y = test_dict[b'labels']
-
-    train_x = train_x.reshape(-1, 32, 32, 3)
-    test_x = test_x.reshape(-1, 32, 32, 3)
-
-    train_y = to_categorical(train_y, num_classes=10)
-    test_y = to_categorical(test_y, num_classes=10)
-
-    return train_x, train_y, test_x, test_y
+    (X_train, y_train), (X_test, y_test) = cifar10.load_data()
+    X_train = X_train.astype('float32')
+    X_test = X_test.astype('float32')
+    X_train /= np.max(X_train)
+    X_test /= np.max(X_test)
+    y_train = to_categorical(y_train, 10)
+    y_test = to_categorical(y_test, 10)
+    return X_train, y_train, X_test, y_test
 
 ### Define the Keras model
 def create_model():
     model = Sequential()
-    adam = Adam(learning_rate=0.01)
+    adam = Adam(learning_rate=0.001)
     model.add(Conv2D(32, (3, 3), activation = 'relu', input_shape = (32, 32, 3)))
-    model.add(MaxPooling2D(pool_size = (2, 2)))
-    model.add(Dropout(0.5))
-    model.add(Conv2D(32, (3, 3), activation = 'relu', input_shape = (32, 32, 3)))
-    model.add(Dropout(0.5))
+    model.add(Dropout(0.2))
+    model.add(Conv2D(64, (5, 5), activation = 'relu'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(128, (3, 3), activation = 'relu'))
+    model.add(Dropout(0.2))
+    model.add(Conv2D(128, (5, 5), activation = 'relu'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(64, (3, 3), activation = 'relu'))
+    model.add(Dropout(0.2))
+    model.add(Conv2D(32, (5, 5), activation = 'relu'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(64, (3, 3), activation = 'relu'))
+    model.add(BatchNormalization())
+    model.add(Conv2D(32, (5, 5), activation = 'relu'))
     model.add(Flatten())
     model.add(Dense(10, activation = 'softmax'))
-
-
     model.compile(loss='categorical_crossentropy', optimizer=adam, metrics=['accuracy'])
     return model
 
@@ -65,7 +68,7 @@ def create_model():
 def calculate_accuracy(predictions, outputs):
     correct = 0
     for i in range(len(predictions)):
-        if np.argmax(predictions[i]) == outputs[i]:
+        if np.argmax(predictions[i]) == np.argmax(outputs[i]):
             correct += 1
     return correct / len(predictions)
 
@@ -80,7 +83,13 @@ if __name__ == "__main__":
     X_train, y_train, X_test, y_test = load_data()
     print(len(X_train), len(y_train))
 
+    early_stopping = EarlyStopping(
+        monitor='val_loss', 
+        min_delta=0.001,    
+        patience=50,        
+        restore_best_weights=True,
+    )
     model = create_model()
-    model.fit(X_train, y_train, epochs=100, verbose=1)
+    model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=1000, batch_size=1024, callbacks=[lr_callback, early_stopping], verbose=1)
     accuracy = evaluate_model(model, X_test, y_test)
     print("Accuracy:", accuracy)
